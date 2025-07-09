@@ -12,7 +12,7 @@ export default function DocsPage() {
   useEffect(() => {
     if (repo) {
       // Simulate backend call
-      fetch(`/api/generate-docs?repo=${repo}`)
+      fetch(`http://localhost:5000/generate-docs?repo=${repo}`)
         .then(res => res.json())
         .then(data => setMarkdown(data.content || "Failed to load docs"))
     }
