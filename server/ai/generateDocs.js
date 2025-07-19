@@ -1,111 +1,65 @@
-const { execSync } = require('child_process');
-const fs = require('fs-extra');
-const path = require('path');
-const fetch = require('node-fetch');
+// Generate Documentation from Repo - Using Together.ai API with Token Limit Handling
 
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`;
+import axios from 'axios';
+import dotenv from 'dotenv';
+import fs from 'fs';
+dotenv.config();
 
-async function readCodeFiles(dir) {
-  const files = await fs.readdir(dir);
-  let result = "";
+const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
+const TOGETHER_API_URL = 'https://api.together.xyz/v1/chat/completions';
+const MODEL_NAME = 'meta-llama/Llama-3-70b-chat-hf';
 
-  for (const file of files) {
-    const fullPath = path.join(dir, file);
-    const stat = await fs.stat(fullPath);
-
-    if (stat.isDirectory()) {
-      // Skip node_modules and .git directories
-      if (file === 'node_modules' || file === '.git') continue;
-      result += await readCodeFiles(fullPath);
-    } else {
-      const ext = path.extname(file);
-      const validExtensions = ['.js', '.ts', '.py', '.java', '.md', '.html', '.css', '.json'];
-
-      if (validExtensions.includes(ext)) {
-        try {
-          const content = await fs.readFile(fullPath, 'utf8');
-          result += `=== FILE: ${file} ===\n\n${content}\n\n`;
-        } catch (err) {
-          console.warn(`⚠️ Could not read ${file}: ${err.message}`);
-        result += `=== FILE: ${file} ===\n\n[Content could not be read]\n\n`;
-        }
-      }
-    }
-  }
-
-  return result;
-}
-
-async function generateDocsFromRepo(repo) {
-  const tmpDir = path.join(__dirname, '../../tmp');
-  await fs.ensureDir(tmpDir);
-
-  const repoName = repo.split('/')[1] || 'repository';
-  const repoPath = path.join(tmpDir, repoName);
-
-  // Cleanup previous clone if exists
-  if (fs.existsSync(repoPath)) {
-    await fs.remove(repoPath);
-  }
-
-  console.log(`📦 Cloning ${repo}...`);
+async function generateDocumentation(repoContent) {
   try {
-    execSync(`git clone https://github.com/${repo}.git ${repoName}`, { 
-      cwd: tmpDir,
-      stdio: 'pipe'
-    });
-  } catch (err) {
-    throw new Error(`Failed to clone repository: ${err.message}`);
+    // Limit tokens to avoid input overflow error
+    const maxInputTokens = 7000;
+    const maxNewTokens = 512;
+    const safeInput = repoContent.slice(0, maxInputTokens);
+
+    if (repoContent.length > maxInputTokens) {
+      console.warn("⚠️ Truncated input to avoid token limit overflow.");
+    }
+
+    const headers = {
+      'Authorization': `Bearer ${TOGETHER_API_KEY}`,
+      'Content-Type': 'application/json'
+    };
+
+    const payload = {
+      model: MODEL_NAME,
+      messages: [
+        {
+          role: "user",
+          content: `Generate a detailed README.md and documentation for the following project source code:
+
+${safeInput}`
+        }
+      ],
+      max_tokens: maxNewTokens,
+      temperature: 0.7
+    };
+
+    const response = await axios.post(TOGETHER_API_URL, payload, { headers });
+    const result = response.data.choices[0].message.content;
+    console.log("📘 Generated Documentation:\n");
+    console.log(result);
+    fs.writeFileSync("GENERATED_README.md", result);
+    console.log("✅ Documentation saved to GENERATED_README.md");
+  } catch (error) {
+    console.error("❌ Error: Failed to generate documentation from Together.ai");
+    console.error(error.response?.data || error.message);
   }
-
-  // Read code files
-  const codeContent = await readCodeFiles(repoPath);
-  if (!codeContent.trim()) {
-    throw new Error("No readable files found in the repository");
-  }
-
-  // Prepare prompt for Gemini
-  const prompt = `
-You are an expert technical writer. Create comprehensive documentation for the following codebase in Markdown format.
-
-Include these sections:
-1. Project Overview - Purpose and main functionality
-2. Installation - How to install and set up
-3. Usage - How to use the project
-4. Architecture - Key components and structure
-5. Configuration - Available options and settings
-6. API Reference (if applicable)
-7. Contributing Guidelines
-8. License Information
-
-Format the documentation professionally with proper headings, code blocks, and examples.
-
-Repository content:
-${codeContent.substring(0, 30000)}  // Limiting to ~30k chars
-`;
-
-  // Call Gemini API
-  const response = await fetch(GEMINI_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [{ text: prompt }]
-      }]
-    })
-  });
-
-  const data = await response.json();
-
-  // Cleanup
-  await fs.remove(repoPath);
-
-  if (!data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-    console.error('API Error:', JSON.stringify(data, null, 2));
-    throw new Error('Failed to generate documentation from API response');
-  }
-
-  return data.candidates[0].content.parts[0].text;
 }
 
-module.exports = { generateDocsFromRepo };
+// Example usage
+const repoPath = './sharmmohit/weather-app';
+const readSourceFiles = (dir) => {
+  const files = fs.readdirSync(dir);
+  return files
+    .filter(file => file.endsWith('.js') || file.endsWith('.ts') || file.endsWith('.jsx') || file.endsWith('.tsx') || file.endsWith('.md'))
+    .map(file => fs.readFileSync(`${dir}/${file}`, 'utf-8'))
+    .join('\n\n');
+};
+
+const repoContent = readSourceFiles(repoPath);
+generateDocumentation(repoContent);
